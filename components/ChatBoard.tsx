@@ -6,7 +6,7 @@ import {
     Bot, MessageSquare, BookOpen, Bookmark, History, Settings,
     Search, Sun, Moon, Send, Paperclip, Plus, Heart,
     Copy, Pencil, ThumbsUp, ThumbsDown, MoreHorizontal,
-    ChevronDown, PanelLeftClose, Sparkles, Menu
+    ChevronDown, PanelLeftClose, Sparkles, Menu, LoaderCircle
 } from "lucide-react";
 
 type Message = {
@@ -42,6 +42,7 @@ export default function ChatBoard() {
         }
     ]);
     const [input, setInput] = useState("");
+    const [isSending, setIsSending] = useState(false);
     const [activeNav, setActiveNav] = useState("Chat Generator");
     const [activeChat, setActiveChat] = useState("Today's job search");
     const [chats, setChats] = useState(initialChats);
@@ -52,14 +53,14 @@ export default function ChatBoard() {
     const [showPrompts, setShowPrompts] = useState(false);
 
 
+
     async function sendMessage(text = input) {
         const clean = text.trim();
-        if (!clean) return;
+        if (!clean || isSending) return;
 
-        setMessages((previous) => [
-            ...previous,
-            { role: "user", text: clean },
-        ]);
+        const nextMessages = [...messages, { role: "user" as const, text: clean }];
+        setMessages(nextMessages);
+        setIsSending(true);
 
         setInput("");
         setActiveNav("Chat Generator");
@@ -71,57 +72,48 @@ export default function ChatBoard() {
             ]);
         }
 
-        // Extract two numbers from the user's message
-        const numbers = clean.match(/-?\d+(\.\d+)?/g);
-
-        if (!numbers || numbers.length < 2) {
-            setMessages((previous) => [
-                ...previous,
-                {
-                    role: "assistant",
-                    text: "Bhai, abhi do numbers bhej kar test kar! Example: 25 + 17",
-                },
-            ]);
-            return;
-        }
-
         try {
-            const response = await fetch("/api/calculate", {
+            const response = await fetch("/api/chat", {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
                 },
                 body: JSON.stringify({
-                    a: Number(numbers[0]),
-                    b: Number(numbers[1]),
+                    messages: nextMessages.slice(-20).map(({ role, text }) => ({
+                        role,
+                        content: text,
+                    })),
                 }),
             });
 
             const data = await response.json();
 
             if (!response.ok) {
-                throw new Error(data.error || "Calculation failed");
+                throw new Error(data.error || "AI request failed.");
             }
-
-            const answer = data.result.structuredContent?.result;
 
             setMessages((previous) => [
                 ...previous,
                 {
                     role: "assistant",
-                    text: `MCP Server ka answer: ${answer}`,
+                    text: data.reply,
                 },
             ]);
         } catch (error) {
-            console.error("MCP API error:", error);
+            console.error("Chat API error:", error);
 
             setMessages((previous) => [
                 ...previous,
                 {
                     role: "assistant",
-                    text: "MCP server se connect nahi ho paya. Check karo ki Python server running hai.",
+                    text:
+                        error instanceof Error
+                            ? error.message
+                            : "Bhai, AI se connect nahi ho paya.",
                 },
             ]);
+        } finally {
+            setIsSending(false);
         }
     }
 
@@ -186,8 +178,8 @@ export default function ChatBoard() {
                                 key={item.name}
                                 onClick={() => setActiveNav(item.name)}
                                 className={`mb-1 flex items-center gap-3 rounded-lg px-3 py-3 text-left text-[12px] transition max-md:justify-center max-md:px-1 ${activeNav === item.name
-                                        ? "bg-[#e9928b] font-semibold text-[#18234a]"
-                                        : "text-blue-50/85 hover:bg-white/10"
+                                    ? "bg-[#e9928b] font-semibold text-[#18234a]"
+                                    : "text-blue-50/85 hover:bg-white/10"
                                     }`}
                                 title={item.name}
                             >
@@ -273,8 +265,8 @@ export default function ChatBoard() {
                                     setActiveNav("Chat Generator");
                                 }}
                                 className={`mb-1 w-full rounded-lg border p-3 text-left transition ${activeChat === chat.title
-                                        ? darkMode ? "border-slate-600 bg-slate-800" : "border-[#f0d6d3] bg-[#fff3f1]"
-                                        : "border-transparent hover:bg-slate-500/5"
+                                    ? darkMode ? "border-slate-600 bg-slate-800" : "border-[#f0d6d3] bg-[#fff3f1]"
+                                    : "border-transparent hover:bg-slate-500/5"
                                     }`}
                             >
                                 <div className="flex items-start gap-2">
@@ -369,8 +361,8 @@ export default function ChatBoard() {
                                             {message.role === "assistant" ? <Bot size={17} /> : <span className="text-[10px] font-bold">YOU</span>}
                                         </div>
                                         <div className={`max-w-[85%] rounded-2xl px-4 py-3.5 text-sm leading-7 ${message.role === "assistant"
-                                                ? darkMode ? "border border-slate-700 bg-slate-900" : "border border-[#ededf3] bg-white shadow-[0_2px_8px_rgba(20,25,60,0.025)]"
-                                                : "bg-[#f9e7e4] text-[#342c45]"
+                                            ? darkMode ? "border border-slate-700 bg-slate-900" : "border border-[#ededf3] bg-white shadow-[0_2px_8px_rgba(20,25,60,0.025)]"
+                                            : "bg-[#f9e7e4] text-[#342c45]"
                                             }`}>
                                             <p className="whitespace-pre-wrap">{message.text}</p>
                                             {message.role === "assistant" && (
@@ -389,6 +381,12 @@ export default function ChatBoard() {
                                         </div>
                                     </div>
                                 ))}
+                                {isSending && (
+                                    <div className={`flex items-center gap-2 text-xs ${muted}`} role="status">
+                                        <LoaderCircle size={15} className="animate-spin" />
+                                        HuntBoard is thinking...
+                                    </div>
+                                )}
                                 {messages.length <= 1 && (
                                     <div className="grid grid-cols-2 gap-3 max-sm:grid-cols-1">
                                         {[
@@ -413,7 +411,7 @@ export default function ChatBoard() {
                                     value={input}
                                     onChange={(event) => setInput(event.target.value)}
                                     onKeyDown={(event) => {
-                                        if (event.key === "Enter" && !event.shiftKey) {
+                                        if (event.key === "Enter" && !event.shiftKey && !isSending) {
                                             event.preventDefault();
                                             sendMessage();
                                         }
@@ -429,8 +427,8 @@ export default function ChatBoard() {
                                             <BookOpen size={15} /> Prompts
                                         </button>
                                     </div>
-                                    <button type="submit" disabled={!input.trim()} className="grid size-9 place-items-center rounded-xl bg-[#e9928b] text-[#172451] transition hover:bg-[#f3aaa3] disabled:cursor-not-allowed disabled:opacity-40" title="Send message">
-                                        <Send size={17} />
+                                    <button type="submit" disabled={!input.trim() || isSending} className="grid size-9 place-items-center rounded-xl bg-[#e9928b] text-[#172451] transition hover:bg-[#f3aaa3] disabled:cursor-not-allowed disabled:opacity-40" title={isSending ? "Sending message" : "Send message"}>
+                                        {isSending ? <LoaderCircle size={17} className="animate-spin" /> : <Send size={17} />}
                                     </button>
                                 </div>
                             </form>
@@ -442,7 +440,7 @@ export default function ChatBoard() {
                                     ))}
                                 </div>
                             )}
-                            <p className={`mt-3 text-center text-[10px] ${muted}`}>Demo interface · AI and live job sources are not connected yet.</p>
+                            <p className={`mt-3 text-center text-[10px] ${muted}`}>Demo interface · Live job listings are not connected yet.</p>
                         </div>
                     </>
                 )}

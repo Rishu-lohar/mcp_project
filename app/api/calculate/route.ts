@@ -8,7 +8,7 @@ export async function POST(request: Request) {
   let client: Client | undefined;
 
   try {
-    const { a, b } = await request.json();
+    const { a, b, operation } = await request.json();
 
     if (
       typeof a !== "number" ||
@@ -18,6 +18,20 @@ export async function POST(request: Request) {
     ) {
       return NextResponse.json(
         { error: "Please provide two valid numbers." },
+        { status: 400 }
+      );
+    }
+
+    const toolMap: Record<string, string> = {
+      add: "add",
+      subtract: "subtract",
+      multiply: "multiply",
+      divide: "divide",
+    };
+
+    if (typeof operation !== "string" || !(operation in toolMap)) {
+      return NextResponse.json(
+        { error: "Please provide a valid operation." },
         { status: 400 }
       );
     }
@@ -34,7 +48,7 @@ export async function POST(request: Request) {
     await client.connect(transport);
 
     const result = await client.callTool({
-      name: "add",
+      name: toolMap[operation],
       arguments: { a, b },
     });
 
@@ -47,6 +61,6 @@ export async function POST(request: Request) {
       { status: 500 }
     );
   } finally {
-    await client?.close().catch(() => {});
+    await client?.close().catch(() => { });
   }
 }
