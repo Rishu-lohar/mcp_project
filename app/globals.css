@@ -29,3 +29,38 @@ button {
   background: #f3c2bc;
   color: #172451;
 }
+
+.markdown-content {
+  font-size: 0.95rem;
+  line-height: 1.8;
+}
+
+.markdown-content > :first-child {
+  margin-top: 0;
+}
+
+.markdown-content > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-content a {
+  word-break: break-word;
+}
+
+.markdown-content pre {
+  margin: 0;
+}
+
+.markdown-content code {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+}
+
+.markdown-content table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.markdown-content th,
+.markdown-content td {
+  word-break: break-word;
+}

@@ -4,8 +4,6 @@ import { NextResponse } from "next/server";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
-
-
 type ChatMessage = {
   role: "user" | "assistant";
   content: string;
@@ -21,6 +19,19 @@ function isChatMessage(value: unknown): value is ChatMessage {
     typeof message.content === "string" &&
     message.content.trim().length > 0 &&
     message.content.length <= 12_000
+  );
+}
+
+function compactToolResult(result: unknown, maxLength = 4000): string {
+  const serialized = JSON.stringify(result);
+
+  if (serialized.length <= maxLength) {
+    return serialized;
+  }
+
+  return (
+    serialized.slice(0, maxLength) +
+    '... [Result truncated to fit the context budget]'
   );
 }
 
@@ -60,12 +71,17 @@ export async function POST(request: Request) {
     );
   }
 
-  const model = process.env.GROQ_MODEL?.trim() || "openai/gpt-oss-20b";
+  const model =
+    process.env.GROQ_MODEL?.trim() || "openai/gpt-oss-20b";
+
   const groq = new Groq({ apiKey });
-  const mcp = new Client({ name: "huntboard-client", version: "1.0.0" });
+  const mcp = new Client({
+    name: "huntboard-client",
+    version: "1.0.0",
+  });
 
   try {
-    // Connect to the Python FastMCP server.
+    // Connect to Python FastMCP.
     const transport = new StreamableHTTPClientTransport(
       new URL(
         process.env.MCP_SERVER_URL?.trim() ||
@@ -75,34 +91,43 @@ export async function POST(request: Request) {
 
     await mcp.connect(transport);
 
-    // Discover the tools currently registered on the MCP server.
+    // Discover available MCP tools.
     const { tools } = await mcp.listTools();
 
+    // Keep tool definitions compact to reduce input tokens.
     const groqTools = tools.map((tool) => ({
       type: "function" as const,
       function: {
         name: tool.name,
-        description: tool.description || `MCP tool: ${tool.name}`,
+        description: (
+          tool.description || `MCP tool: ${tool.name}`
+        ).slice(0, 200),
         parameters: tool.inputSchema as Record<string, unknown>,
       },
     }));
 
-    const messages = [
+    // Send only recent messages to Groq.
+    const recentMessages = body.messages.slice(-6);
+
+    const messages: Array<Record<string, unknown>> = [
       {
-        role: "system" as const,
+        role: "system",
         content:
-          "You are HuntBoard, a helpful career and general AI assistant. Answer general questions normally. When a user's request needs an available MCP tool, call the appropriate tool. Never claim a tool succeeded unless its result confirms success. Explain job results using only returned data. Ask for missing information when needed.",
+          "You are HuntBoard, a helpful career and general AI assistant. Answer general questions normally. Use available MCP tools when needed. Never claim a tool succeeded unless its result confirms success. Use only returned data for job results. Ask for missing information when necessary. Do not create, modify, or delete files unless the user explicitly requests it.",
       },
-      ...body.messages,
+      ...recentMessages.map((message) => ({
+        role: message.role,
+        content: message.content,
+      })),
     ];
 
-    // Allow multiple tool calls, but prevent an endless loop.
-    for (let turn = 0; turn < 6; turn++) {
+    // Prevent endless tool-call loops.
+    for (let turn = 0; turn < 4; turn++) {
       const completion = await groq.chat.completions.create({
         model,
         reasoning_effort: "low",
-        max_completion_tokens: 2048,
-        messages,
+        max_completion_tokens: 1024,
+        messages: messages as never,
         ...(groqTools.length > 0 ? { tools: groqTools } : {}),
         tool_choice: groqTools.length > 0 ? "auto" : "none",
       });
@@ -113,7 +138,7 @@ export async function POST(request: Request) {
         throw new Error("Groq returned an empty response.");
       }
 
-      messages.push(assistantMessage as (typeof messages)[number]);
+      messages.push(assistantMessage as unknown as Record<string, unknown>);
 
       const toolCalls = assistantMessage.tool_calls ?? [];
 
@@ -134,7 +159,10 @@ export async function POST(request: Request) {
         let args: Record<string, unknown>;
 
         try {
-          const parsed: unknown = JSON.parse(toolCall.function.arguments);
+          const parsed: unknown = JSON.parse(
+            toolCall.function.arguments
+          );
+
           if (
             typeof parsed !== "object" ||
             parsed === null ||
@@ -142,6 +170,7 @@ export async function POST(request: Request) {
           ) {
             throw new Error("Tool arguments must be a JSON object.");
           }
+
           args = parsed as Record<string, unknown>;
         } catch {
           messages.push({
@@ -154,12 +183,14 @@ export async function POST(request: Request) {
           continue;
         }
 
-        // Only execute tools that the MCP server actually advertised.
+        // Only execute tools advertised by the MCP server.
         if (!tools.some((tool) => tool.name === toolName)) {
           messages.push({
             role: "tool",
             tool_call_id: toolCall.id,
-            content: JSON.stringify({ error: "Unknown MCP tool." }),
+            content: JSON.stringify({
+              error: "Unknown MCP tool.",
+            }),
           });
           continue;
         }
@@ -170,10 +201,11 @@ export async function POST(request: Request) {
             arguments: args,
           });
 
+          // Limit large tool results sent back to Groq.
           messages.push({
             role: "tool",
             tool_call_id: toolCall.id,
-            content: JSON.stringify(result),
+            content: compactToolResult(result),
           });
         } catch (error) {
           console.error(`MCP tool "${toolName}" failed:`, error);
@@ -191,7 +223,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       reply:
-        "I reached the tool-call limit for this request. Please try a more specific question.",
+        "I reached the tool-call limit. Please try a more specific question.",
     });
   } catch (error) {
     console.error("Chat/MCP error:", error);
@@ -204,9 +236,12 @@ export async function POST(request: Request) {
         );
       }
 
-      if (error.status === 429) {
+      if (error.status === 413 || error.status === 429) {
         return NextResponse.json(
-          { error: "Groq rate limit reached. Please wait and retry." },
+          {
+            error:
+              "Groq token limit reached. Try a shorter message or wait briefly before retrying.",
+          },
           { status: 429 }
         );
       }
@@ -222,7 +257,7 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         error:
-          "Could not complete the AI/MCP request. Check that the Python MCP server is running on port 8000 and inspect the Next.js terminal for details.",
+          "Could not complete the AI/MCP request. Check the Python MCP server and inspect the Next.js terminal for details.",
       },
       { status: 502 }
     );
